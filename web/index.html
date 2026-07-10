@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Rama Controlled Extractor · Panel de control</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">R</div>
+        <div>
+          <p class="eyebrow">Rama Controlled Extractor</p>
+          <h1>Panel de configuración y escaneo</h1>
+        </div>
+      </div>
+      <div id="connectionBadge" class="connection-badge"><span></span> Conectando</div>
+    </header>
+
+    <main class="layout">
+      <aside class="sidebar" aria-label="Secciones de configuración">
+        <button class="nav-button active" data-target="targets" type="button">Objetivos</button>
+        <button class="nav-button" data-target="policy" type="button">Política y seguridad</button>
+        <button class="nav-button" data-target="performance" type="button">Rendimiento</button>
+        <button class="nav-button" data-target="extraction" type="button">Extracción</button>
+        <button class="nav-button" data-target="storage" type="button">Almacenamiento</button>
+        <button class="nav-button" data-target="advanced" type="button">Avanzado</button>
+        <div class="sidebar-note">
+          <strong>Control local</strong>
+          <p>El panel escucha por defecto únicamente en <code>127.0.0.1</code>.</p>
+        </div>
+      </aside>
+
+      <section class="workspace">
+        <div id="alert" class="alert hidden" role="alert"></div>
+
+        <section class="scan-card" aria-labelledby="scanTitle">
+          <div>
+            <p class="eyebrow">Estado del motor</p>
+            <h2 id="scanTitle">Preparando aplicación…</h2>
+            <p id="scanMessage">Cargando la configuración actual.</p>
+          </div>
+          <div class="scan-actions">
+            <label class="clean-option"><input id="cleanOutput" type="checkbox"> Limpiar salidas antes de escanear</label>
+            <button id="validateButton" class="button secondary" type="button">Validar</button>
+            <button id="saveButton" class="button secondary" type="button">Guardar</button>
+            <button id="scanButton" class="button primary" type="button" disabled>Iniciar escaneo</button>
+            <button id="cancelButton" class="button danger hidden" type="button">Cancelar</button>
+            <a id="dashboardButton" class="button success hidden" href="/dashboard" target="_blank" rel="noopener">Ver resultados</a>
+          </div>
+          <div class="progress-area">
+            <div class="progress-track" aria-label="Progreso del escaneo"><div id="progressBar" class="progress-bar"></div></div>
+            <div class="progress-metrics">
+              <span><strong id="metricProcessed">0</strong> procesadas</span>
+              <span><strong id="metricScheduled">0</strong> programadas</span>
+              <span><strong id="metricRecords">0</strong> registros</span>
+              <span><strong id="metricErrors">0</strong> errores</span>
+              <span><strong id="metricBytes">0 B</strong> descargados</span>
+            </div>
+          </div>
+        </section>
+
+        <form id="configForm" novalidate>
+          <section id="targets" class="panel active" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 1</p><h2>Objetivos del rastreo</h2></div>
+              <p>Define las URL iniciales y limita de manera explícita los dominios autorizados.</p>
+            </div>
+            <div class="form-grid two-columns">
+              <label class="field full">
+                <span>URL semilla <em>una por línea</em></span>
+                <textarea id="seeds" rows="6" spellcheck="false" placeholder="https://www.ejemplo.org/"></textarea>
+                <small>Solo se aceptan URL HTTP o HTTPS incluidas en la política.</small>
+              </label>
+              <label class="field">
+                <span>Dominios permitidos <em>uno por línea</em></span>
+                <textarea id="allowedDomains" rows="6" spellcheck="false" placeholder="www.ejemplo.org"></textarea>
+                <small>Escribe nombres de host, sin protocolo ni rutas.</small>
+              </label>
+              <label class="field">
+                <span>Prefijos de ruta denegados <em>uno por línea</em></span>
+                <textarea id="deniedPaths" rows="6" spellcheck="false" placeholder="/admin&#10;/login&#10;/checkout"></textarea>
+              </label>
+              <label class="field full">
+                <span>Puertos permitidos</span>
+                <input id="allowedPorts" type="text" inputmode="numeric" placeholder="80, 443">
+              </label>
+            </div>
+          </section>
+
+          <section id="policy" class="panel" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 2</p><h2>Política y seguridad</h2></div>
+              <p>Controla robots.txt, descubrimiento de enlaces, filtros y acceso de red.</p>
+            </div>
+            <div class="toggle-grid">
+              <label class="toggle"><input id="allowSubdomains" type="checkbox"><span></span><div><strong>Permitir subdominios</strong><small>Amplía cada dominio autorizado a sus subdominios.</small></div></label>
+              <label class="toggle warning"><input id="allowPrivateNetworks" type="checkbox"><span></span><div><strong>Permitir redes privadas</strong><small>Actívalo únicamente para sistemas internos autorizados.</small></div></label>
+              <label class="toggle"><input id="respectRobots" type="checkbox"><span></span><div><strong>Respetar robots.txt</strong><small>Consulta y aplica las reglas publicadas por el sitio.</small></div></label>
+              <label class="toggle"><input id="robotsFailClosed" type="checkbox"><span></span><div><strong>Bloquear si robots.txt falla</strong><small>Política conservadora cuando no puede obtenerse el archivo.</small></div></label>
+              <label class="toggle"><input id="discoverLinks" type="checkbox"><span></span><div><strong>Descubrir enlaces</strong><small>Continúa el rastreo desde los enlaces encontrados.</small></div></label>
+            </div>
+            <div class="form-grid two-columns top-gap">
+              <label class="field"><span>Identificador para robots.txt</span><input id="robotsUserAgent" type="text"></label>
+              <label class="field"><span>Selector CSS de enlaces</span><input id="linkSelector" type="text" spellcheck="false"></label>
+              <label class="field"><span>Regex de URL incluidas</span><input id="includeRegex" type="text" spellcheck="false" placeholder="Vacío: todas"></label>
+              <label class="field"><span>Regex de URL excluidas</span><input id="excludeRegex" type="text" spellcheck="false" placeholder="(?i)(/login|/account)"></label>
+            </div>
+          </section>
+
+          <section id="performance" class="panel" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 3</p><h2>Rendimiento y límites</h2></div>
+              <p>Empieza con valores conservadores y aumenta la carga solo cuando tengas autorización.</p>
+            </div>
+            <div class="form-grid three-columns">
+              <label class="field"><span>Máximo de páginas</span><input id="maxPages" type="number" min="1" max="100000"></label>
+              <label class="field"><span>Profundidad máxima</span><input id="maxDepth" type="number" min="0" max="100"></label>
+              <label class="field"><span>Concurrencia global</span><input id="concurrency" type="number" min="1" max="256"></label>
+              <label class="field"><span>Concurrencia por host</span><input id="perHostConcurrency" type="number" min="1" max="64"></label>
+              <label class="field"><span>Demora mínima, ms</span><input id="minDelayMs" type="number" min="0" max="3600000"></label>
+              <label class="field"><span>Timeout, segundos</span><input id="timeoutSecs" type="number" min="1" max="3600"></label>
+              <label class="field"><span>Reintentos</span><input id="retries" type="number" min="0" max="20"></label>
+              <label class="field"><span>Límite de redirects</span><input id="redirectLimit" type="number" min="0" max="32"></label>
+              <label class="field"><span>Cuerpo máximo, MB</span><input id="maxBodyMb" type="number" min="0.1" max="1024" step="0.1"></label>
+              <label class="field full"><span>Perfil de User-Agent</span>
+                <select id="userAgentProfile">
+                  <option value="minimal_bot">Bot mínimo y transparente</option>
+                  <option value="firefox_linux">Firefox Linux</option>
+                  <option value="chrome_linux">Chrome Linux</option>
+                  <option value="safari_macos">Safari macOS</option>
+                  <option value="custom">Personalizado</option>
+                </select>
+              </label>
+              <div id="customUserAgentFields" class="nested-card full hidden">
+                <label class="field"><span>Cadena User-Agent personalizada</span><input id="customUserAgent" type="text"></label>
+                <label class="field"><span>Cabeceras del perfil <em>nombre: valor</em></span><textarea id="customProfileHeaders" rows="4" spellcheck="false"></textarea></label>
+              </div>
+            </div>
+          </section>
+
+          <section id="extraction" class="panel" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 4</p><h2>Reglas de extracción</h2></div>
+              <p>Las reglas se editan como JSON para conservar toda la expresividad del motor.</p>
+            </div>
+            <div class="editor-toolbar">
+              <button id="formatRulesButton" class="button secondary small" type="button">Formatear JSON</button>
+              <button id="articlePresetButton" class="button secondary small" type="button">Preset de artículos</button>
+              <span id="rulesStatus" class="editor-status">Sin validar</span>
+            </div>
+            <label class="field">
+              <span>Array de reglas</span>
+              <textarea id="extractionRules" class="code-editor" rows="24" spellcheck="false"></textarea>
+            </label>
+            <details class="help-box">
+              <summary>Formato de una regla HTML</summary>
+              <pre>{
+  "kind": "html_records",
+  "name": "articles",
+  "item_selector": "article",
+  "fields": {
+    "title": { "selector": "h2 a", "trim": true },
+    "url": { "selector": "h2 a", "attribute": "href", "trim": true }
+  }
+}</pre>
+            </details>
+          </section>
+
+          <section id="storage" class="panel" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 5</p><h2>Almacenamiento</h2></div>
+              <p>Selecciona las rutas de salida relativas al directorio desde el que ejecutas la aplicación.</p>
+            </div>
+            <div class="form-grid two-columns">
+              <label class="field"><span>SQLite</span><input id="sqlitePath" type="text" spellcheck="false"></label>
+              <label class="field"><span>Registros JSONL</span><input id="jsonlPath" type="text" spellcheck="false"></label>
+              <label class="field"><span>Resumen JSON</span><input id="summaryPath" type="text" spellcheck="false"></label>
+              <label class="field"><span>Directorio de cuerpos</span><input id="bodiesDir" type="text" spellcheck="false"></label>
+              <label class="toggle full"><input id="saveBodies" type="checkbox"><span></span><div><strong>Guardar cuerpos descargados</strong><small>Puede consumir bastante espacio y almacenar información sensible.</small></div></label>
+            </div>
+          </section>
+
+          <section id="advanced" class="panel" data-panel>
+            <div class="panel-heading">
+              <div><p class="eyebrow">Paso 6</p><h2>Opciones avanzadas</h2></div>
+              <p>Cabeceras, proxies y configuración WebSocket opcional.</p>
+            </div>
+            <div class="form-grid two-columns">
+              <label class="field"><span>Cabeceras HTTP <em>nombre: valor</em></span><textarea id="customHeaders" rows="8" spellcheck="false"></textarea></label>
+              <label class="field"><span>Proxies upstream <em>uno por línea</em></span><textarea id="proxies" rows="8" spellcheck="false" placeholder="http://proxy.example:3128&#10;socks5h://proxy.example:1080"></textarea></label>
+              <label class="field full"><span>WebSocket opcional <em>JSON o null</em></span><textarea id="websocketConfig" class="code-editor" rows="12" spellcheck="false">null</textarea></label>
+            </div>
+            <details class="danger-box">
+              <summary>Advertencia sobre credenciales</summary>
+              <p>Las credenciales escritas en proxies o cabeceras se guardarán en el YAML local. Protege el archivo y no lo confirmes en Git.</p>
+            </details>
+          </section>
+        </form>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

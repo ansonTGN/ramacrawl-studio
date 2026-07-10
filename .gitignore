@@ -1,0 +1,29 @@
+/target
+/output/*
+!/output/.gitkeep
+.env
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+
+config/*.tmp
+
+# Local crawler configurations
+/config/local.yaml
+/config/salutmental.yaml
+
+# Extraction results
+/output/*
+!/output/.gitkeep
+*.sqlite3
+*.sqlite3-shm
+*.sqlite3-wal
+*.jsonl
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Rust build
+/target/

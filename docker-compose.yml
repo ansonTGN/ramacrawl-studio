@@ -1,0 +1,30 @@
+services:
+  extractor:
+    build:
+      context: .
+      args:
+        FEATURES: portable-tls
+    command:
+      - serve
+      - --config
+      - /data/config/salutmental.yaml
+      - --bind
+      - 0.0.0.0:8090
+      - --allow-remote
+      - --no-open
+    environment:
+      RUST_LOG: "rama_controlled_extractor=info,rama=info"
+    user: "${LOCAL_UID:-1000}:${LOCAL_GID:-1000}"
+    ports:
+      - "127.0.0.1:8090:8090"
+    volumes:
+      - ./config:/data/config
+      - ./output:/data/output
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped

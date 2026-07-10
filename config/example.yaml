@@ -1,0 +1,143 @@
+# Configuración de prueba autorizada para https://www.salutmental.org/
+# Objetivo: validar crawling HTML, descubrimiento de enlaces, robots.txt,
+# fingerprints y persistencia sin generar una carga innecesaria.
+
+crawler:
+  seeds:
+    - "https://www.salutmental.org/"
+    - "https://www.salutmental.org/noticies/"
+    - "https://www.salutmental.org/agenda/"
+
+  # Se permite exclusivamente el host indicado. Los enlaces externos
+  # encontrados en las páginas se descartarán automáticamente.
+  allowed_domains:
+    - "www.salutmental.org"
+
+  # Rutas administrativas, formularios sensibles y endpoints que no forman
+  # parte de esta prueba de contenido público.
+  denied_path_prefixes:
+    - "/wp-admin"
+    - "/wp-login.php"
+    - "/xmlrpc.php"
+    - "/contacte"
+    - "/demana-ajuda"
+    - "/canal-de-denuncia"
+    - "/fes-un-donatiu"
+    - "/donatiu"
+
+  allowed_ports: [80, 443]
+  allow_subdomains: false
+  allow_private_networks: false
+
+  # El robots.txt actual permite el agente genérico, pero se conserva una
+  # política fail-closed: si no puede leerse, el crawler no continúa.
+  respect_robots_txt: true
+  robots_fail_closed: true
+  robots_user_agent: "RamaControlledExtractor"
+
+  # Parámetros deliberadamente conservadores para la primera prueba.
+  max_pages: 30
+  max_depth: 2
+  concurrency: 2
+  per_host_concurrency: 1
+  min_delay_ms: 2500
+  timeout_secs: 30
+  retries: 2
+  redirect_limit: 5
+  max_body_bytes: 8388608
+
+  user_agent_profile: minimal_bot
+  custom_headers:
+    dnt: "1"
+    accept-language: "ca-ES,ca;q=0.9,es;q=0.8,en;q=0.5"
+    x-crawler-purpose: "authorized-functional-test"
+
+  proxies: []
+  discover_links: true
+
+  # Limita el descubrimiento a enlaces del contenido principal y artículos,
+  # reduciendo enlaces repetidos de cabecera, pie y redes sociales.
+  link_selector: "main a[href], article a[href]"
+  include_url_regex: null
+
+  # Evita endpoints de gestión, búsquedas, feeds, autores, etiquetas y
+  # descargas binarias durante esta prueba funcional.
+  exclude_url_regex: >-
+    (?i)(/wp-admin|/wp-login\.php|/xmlrpc\.php|/feed/?$|/author/|/tag/|/search/|[?&](s|replytocom)=|\.(pdf|zip|rar|7z|jpg|jpeg|png|gif|webp|svg|mp4|mp3|doc|docx|xls|xlsx|ppt|pptx)([?#]|$))
+
+extraction:
+  rules:
+    # Registros de noticias o entradas. Se usan selectores alternativos para
+    # tolerar variaciones habituales de plantillas WordPress/Elementor.
+    - kind: html_records
+      name: salutmental_articles
+      item_selector: "article, .elementor-post, .post-item, .blog-post"
+      fields:
+        title:
+          selector: "h1, h2, h3, h4"
+          trim: true
+        url:
+          selector: "h1 a[href], h2 a[href], h3 a[href], h4 a[href], a[href]"
+          attribute: "href"
+          trim: true
+        date:
+          selector: "time, .entry-date, .post-date, .published, [class*='date']"
+          trim: true
+        summary:
+          selector: ".entry-summary, .post-excerpt, .excerpt, .elementor-post__excerpt, p"
+          trim: true
+        categories:
+          selector: ".cat-links a, .post-categories a, .elementor-post__badge, [rel='category tag']"
+          all: true
+          trim: true
+        image_url:
+          selector: "img[src]"
+          attribute: "src"
+          trim: true
+
+    # Metadatos generales de cada página. Esta regla permite obtener al menos
+    # un registro útil aunque una página no utilice tarjetas <article>.
+    - kind: html_records
+      name: salutmental_page
+      item_selector: "main"
+      fields:
+        page_title:
+          selector: "h1, h2"
+          trim: true
+        first_paragraph:
+          selector: "p"
+          trim: true
+        headings:
+          selector: "h2, h3"
+          all: true
+          trim: true
+        internal_links:
+          selector: "a[href]"
+          attribute: "href"
+          all: true
+          trim: true
+        images:
+          selector: "img[src]"
+          attribute: "src"
+          all: true
+          trim: true
+
+storage:
+  sqlite_path: "output/salutmental-extractor.sqlite3"
+  jsonl_path: "output/salutmental-records.jsonl"
+  summary_path: "output/salutmental-summary.json"
+
+  # Activado para la prueba. Desactívalo después de validar los selectores si
+  # no necesitas conservar copias completas del HTML descargado.
+  save_bodies: true
+  bodies_dir: "output/salutmental-bodies"
+
+# El dominio no publica un WebSocket necesario para esta prueba, por lo que
+# esta sección permanece desactivada.
+# websocket:
+#   url: "wss://www.salutmental.org/events"
+#   send_text: []
+#   max_messages: 10
+#   timeout_secs: 20
+#   json_paths: []
+#   output_path: "output/salutmental-websocket.jsonl"
