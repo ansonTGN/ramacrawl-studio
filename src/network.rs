@@ -78,8 +78,10 @@ pub fn build_client(
         },
     };
 
-    let database = UserAgentDatabase::try_embedded()
-        .map_err(|error| anyhow!("failed to load embedded User-Agent database: {error}"))?;
+    let database = Arc::new(
+        UserAgentDatabase::try_embedded()
+            .map_err(|error| anyhow!("failed to load embedded User-Agent database: {error}"))?,
+    );
     let connector = EasyHttpWebClient::connector_builder()
         .with_default_transport_connector()
         .with_default_dns_connector()
@@ -104,7 +106,8 @@ pub fn build_client(
             .with_is_optional(true),
         EmulateTlsProfileLayer::new(),
     )
-        .into_layer(connector))
+        .into_layer(connector)
+        .boxed())
 }
 
 #[derive(Debug)]

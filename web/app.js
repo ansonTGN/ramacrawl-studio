@@ -372,6 +372,15 @@ function updateStatus(status) {
   const percent = phase === 'completed' ? 100 : Math.min(100, (processed / denominator) * 100);
   progressBar.style.width = `${percent}%`;
   progressBar.classList.toggle('indeterminate', state.running && scheduled === 0);
+  const progressTrack = progressBar.parentElement;
+  if (progressTrack) {
+    progressTrack.setAttribute('aria-valuenow', String(Math.round(percent)));
+    progressTrack.setAttribute('aria-valuetext', state.running && scheduled === 0
+      ? 'Escaneo en curso, progreso indeterminado'
+      : `${Math.round(percent)} por ciento`);
+  }
+  const scanCard = document.querySelector('.scan-card');
+  if (scanCard) scanCard.setAttribute('aria-busy', String(state.running));
   byId('metricProcessed').textContent = processed.toLocaleString('es-ES');
   byId('metricScheduled').textContent = scheduled.toLocaleString('es-ES');
   byId('metricRecords').textContent = Number(progress.records_extracted || 0).toLocaleString('es-ES');
@@ -536,12 +545,29 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 ** index)).toLocaleString('es-ES', { maximumFractionDigits: 1 })} ${units[index]}`;
 }
 
-for (const button of document.querySelectorAll('.nav-button')) {
+const navigationButtons = [...document.querySelectorAll('.nav-button')];
+const configurationPanels = [...document.querySelectorAll('[data-panel]')];
+
+for (const button of navigationButtons) {
+  const targetPanel = byId(button.dataset.target);
+  button.setAttribute('aria-controls', button.dataset.target);
+  button.setAttribute('aria-current', button.classList.contains('active') ? 'step' : 'false');
+  if (targetPanel) targetPanel.hidden = !targetPanel.classList.contains('active');
+
   button.addEventListener('click', () => {
-    document.querySelectorAll('.nav-button').forEach((item) => item.classList.remove('active'));
-    document.querySelectorAll('[data-panel]').forEach((panel) => panel.classList.remove('active'));
+    navigationButtons.forEach((item) => {
+      item.classList.remove('active');
+      item.setAttribute('aria-current', 'false');
+    });
+    configurationPanels.forEach((panel) => {
+      panel.classList.remove('active');
+      panel.hidden = true;
+    });
     button.classList.add('active');
-    byId(button.dataset.target).classList.add('active');
+    button.setAttribute('aria-current', 'step');
+    targetPanel.classList.add('active');
+    targetPanel.hidden = false;
+    targetPanel.focus({ preventScroll: true });
     window.scrollTo({ top: 0, behavior: 'smooth' });
   });
 }
