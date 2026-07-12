@@ -3,71 +3,156 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light dark">
-  <title>Rama Controlled Extractor · Panel de control</title>
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#7209b7">
+  <meta name="description" content="Panel local de configuración, ejecución y seguimiento de RamaCrawl Studio.">
+  <title>RamaCrawl Studio · Workspace de extracción</title>
   <link rel="stylesheet" href="/styles.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <a class="skip-link" href="#workspace">Saltar al contenido principal</a>
+
+  <div class="ambient ambient-one" aria-hidden="true"></div>
+  <div class="ambient ambient-two" aria-hidden="true"></div>
+  <div class="ambient ambient-three" aria-hidden="true"></div>
+
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark" aria-hidden="true">R</div>
-        <div>
-          <p class="eyebrow">Rama Controlled Extractor</p>
-          <h1>Panel de configuración y escaneo</h1>
+        <div class="brand-mark" aria-hidden="true">
+          <span>R</span>
+          <i></i>
+        </div>
+        <div class="brand-copy">
+          <p class="eyebrow">RamaCrawl Studio / local workspace</p>
+          <h1>Extracción controlada, visible y trazable</h1>
         </div>
       </div>
-      <div id="connectionBadge" class="connection-badge"><span></span> Conectando</div>
+
+      <div class="topbar-status">
+        <div class="collaborators" aria-label="Entorno de trabajo colaborativo">
+          <span class="avatar avatar-violet" title="Política">P</span>
+          <span class="avatar avatar-blue" title="Extracción">E</span>
+          <span class="avatar avatar-lime" title="Resultados">R</span>
+          <span class="collaborators-label">3 capas activas</span>
+        </div>
+        <div id="connectionBadge" class="connection-badge" role="status" aria-live="polite"><span></span> Conectando</div>
+      </div>
     </header>
 
     <main class="layout">
       <aside class="sidebar" aria-label="Secciones de configuración">
-        <button class="nav-button active" data-target="targets" type="button">Objetivos</button>
-        <button class="nav-button" data-target="policy" type="button">Política y seguridad</button>
-        <button class="nav-button" data-target="performance" type="button">Rendimiento</button>
-        <button class="nav-button" data-target="extraction" type="button">Extracción</button>
-        <button class="nav-button" data-target="storage" type="button">Almacenamiento</button>
-        <button class="nav-button" data-target="advanced" type="button">Avanzado</button>
+        <div class="sidebar-heading">
+          <span class="sidebar-kicker">Flujo de trabajo</span>
+          <strong>Configuración del crawler</strong>
+        </div>
+
+        <nav class="workflow-nav" aria-label="Pasos de configuración">
+          <button class="nav-button active" data-target="targets" type="button">
+            <span class="nav-step">01</span>
+            <span class="nav-copy"><strong>Objetivos</strong><small>Semillas y dominios</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button class="nav-button" data-target="policy" type="button">
+            <span class="nav-step">02</span>
+            <span class="nav-copy"><strong>Política</strong><small>Seguridad y robots</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button class="nav-button" data-target="performance" type="button">
+            <span class="nav-step">03</span>
+            <span class="nav-copy"><strong>Rendimiento</strong><small>Límites y concurrencia</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button class="nav-button" data-target="extraction" type="button">
+            <span class="nav-step">04</span>
+            <span class="nav-copy"><strong>Extracción</strong><small>Reglas estructuradas</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button class="nav-button" data-target="storage" type="button">
+            <span class="nav-step">05</span>
+            <span class="nav-copy"><strong>Almacenamiento</strong><small>SQLite y JSONL</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+          <button class="nav-button" data-target="advanced" type="button">
+            <span class="nav-step">06</span>
+            <span class="nav-copy"><strong>Avanzado</strong><small>Headers, proxy y WS</small></span>
+            <span class="nav-arrow" aria-hidden="true">↗</span>
+          </button>
+        </nav>
+
         <div class="sidebar-note">
-          <strong>Control local</strong>
+          <div class="local-status"><span></span> Entorno local protegido</div>
           <p>El panel escucha por defecto únicamente en <code>127.0.0.1</code>.</p>
+          <div class="policy-tags" aria-label="Controles activos">
+            <span>allowlist</span><span>SSRF</span><span>robots</span>
+          </div>
         </div>
       </aside>
 
-      <section class="workspace">
+      <section id="workspace" class="workspace" tabindex="-1">
         <div id="alert" class="alert hidden" role="alert"></div>
 
         <section class="scan-card" aria-labelledby="scanTitle">
-          <div>
-            <p class="eyebrow">Estado del motor</p>
+          <div class="scan-orbit orbit-one" aria-hidden="true"></div>
+          <div class="scan-orbit orbit-two" aria-hidden="true"></div>
+
+          <div class="scan-intro">
+            <div class="scan-kicker"><span></span> Motor Rama / telemetría en vivo</div>
+            <p class="eyebrow">Estado de ejecución</p>
             <h2 id="scanTitle">Preparando aplicación…</h2>
             <p id="scanMessage">Cargando la configuración actual.</p>
           </div>
-          <div class="scan-actions">
-            <label class="clean-option"><input id="cleanOutput" type="checkbox"> Limpiar salidas antes de escanear</label>
-            <button id="validateButton" class="button secondary" type="button">Validar</button>
-            <button id="saveButton" class="button secondary" type="button">Guardar</button>
-            <button id="scanButton" class="button primary" type="button" disabled>Iniciar escaneo</button>
-            <button id="cancelButton" class="button danger hidden" type="button">Cancelar</button>
-            <a id="dashboardButton" class="button success hidden" href="/dashboard" target="_blank" rel="noopener">Ver resultados</a>
-          </div>
-          <div class="progress-area">
-            <div class="progress-track" aria-label="Progreso del escaneo"><div id="progressBar" class="progress-bar"></div></div>
-            <div class="progress-metrics">
-              <span><strong id="metricProcessed">0</strong> procesadas</span>
-              <span><strong id="metricScheduled">0</strong> programadas</span>
-              <span><strong id="metricRecords">0</strong> registros</span>
-              <span><strong id="metricErrors">0</strong> errores</span>
-              <span><strong id="metricBytes">0 B</strong> descargados</span>
+
+          <div class="scan-control">
+            <label class="clean-option">
+              <input id="cleanOutput" type="checkbox">
+              <span class="check-visual" aria-hidden="true"></span>
+              <span><strong>Inicio limpio</strong><small>Vaciar salidas antes del escaneo</small></span>
+            </label>
+            <div class="scan-actions">
+              <button id="validateButton" class="button secondary" type="button"><span>Validar</span></button>
+              <button id="saveButton" class="button secondary" type="button"><span>Guardar</span></button>
+              <button id="scanButton" class="button primary" type="button" disabled><span>Iniciar escaneo</span><b aria-hidden="true">→</b></button>
+              <button id="cancelButton" class="button danger hidden" type="button"><span>Cancelar</span></button>
+              <a id="dashboardButton" class="button success hidden" href="/dashboard" target="_blank" rel="noopener"><span>Ver resultados</span><b aria-hidden="true">↗</b></a>
             </div>
           </div>
+
+          <div class="progress-area">
+            <div class="progress-header">
+              <span>Progreso operativo</span>
+              <span class="progress-hint">actualización automática</span>
+            </div>
+            <div class="progress-track" role="progressbar" aria-label="Progreso del escaneo" aria-valuemin="0" aria-valuemax="100">
+              <div id="progressBar" class="progress-bar"></div>
+            </div>
+            <div class="progress-metrics">
+              <article class="metric"><span class="metric-icon">↳</span><div><strong id="metricProcessed">0</strong><small>procesadas</small></div></article>
+              <article class="metric"><span class="metric-icon">＋</span><div><strong id="metricScheduled">0</strong><small>programadas</small></div></article>
+              <article class="metric"><span class="metric-icon">◇</span><div><strong id="metricRecords">0</strong><small>registros</small></div></article>
+              <article class="metric"><span class="metric-icon">!</span><div><strong id="metricErrors">0</strong><small>errores</small></div></article>
+              <article class="metric"><span class="metric-icon">↓</span><div><strong id="metricBytes">0 B</strong><small>descargados</small></div></article>
+            </div>
+          </div>
+
+          <div class="remote-cursor cursor-policy" aria-hidden="true"><i></i><span>policy.rs</span></div>
+          <div class="remote-cursor cursor-storage" aria-hidden="true"><i></i><span>storage.rs</span></div>
         </section>
 
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">Configuration canvas</p>
+            <h2>Diseña una ejecución segura</h2>
+          </div>
+          <p>Cada capa se valida en el navegador y nuevamente en Rust antes de guardar o ejecutar.</p>
+        </div>
+
         <form id="configForm" novalidate>
-          <section id="targets" class="panel active" data-panel>
+          <section id="targets" class="panel active" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 1</p><h2>Objetivos del rastreo</h2></div>
+              <div class="panel-title-group"><span class="panel-number">01</span><div><p class="eyebrow">Origen del flujo</p><h2>Objetivos del rastreo</h2></div></div>
               <p>Define las URL iniciales y limita de manera explícita los dominios autorizados.</p>
             </div>
             <div class="form-grid two-columns">
@@ -92,9 +177,10 @@
             </div>
           </section>
 
-          <section id="policy" class="panel" data-panel>
+          <section id="policy" class="panel" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 2</p><h2>Política y seguridad</h2></div>
+              <div class="panel-title-group"><span class="panel-number">02</span><div><p class="eyebrow">Guardrails</p><h2>Política y seguridad</h2></div></div>
               <p>Controla robots.txt, descubrimiento de enlaces, filtros y acceso de red.</p>
             </div>
             <div class="toggle-grid">
@@ -112,9 +198,10 @@
             </div>
           </section>
 
-          <section id="performance" class="panel" data-panel>
+          <section id="performance" class="panel" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 3</p><h2>Rendimiento y límites</h2></div>
+              <div class="panel-title-group"><span class="panel-number">03</span><div><p class="eyebrow">Control de carga</p><h2>Rendimiento y límites</h2></div></div>
               <p>Empieza con valores conservadores y aumenta la carga solo cuando tengas autorización.</p>
             </div>
             <div class="form-grid three-columns">
@@ -143,9 +230,10 @@
             </div>
           </section>
 
-          <section id="extraction" class="panel" data-panel>
+          <section id="extraction" class="panel" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 4</p><h2>Reglas de extracción</h2></div>
+              <div class="panel-title-group"><span class="panel-number">04</span><div><p class="eyebrow">Modelo de datos</p><h2>Reglas de extracción</h2></div></div>
               <p>Las reglas se editan como JSON para conservar toda la expresividad del motor.</p>
             </div>
             <div class="editor-toolbar">
@@ -171,9 +259,10 @@
             </details>
           </section>
 
-          <section id="storage" class="panel" data-panel>
+          <section id="storage" class="panel" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 5</p><h2>Almacenamiento</h2></div>
+              <div class="panel-title-group"><span class="panel-number">05</span><div><p class="eyebrow">Persistencia</p><h2>Almacenamiento</h2></div></div>
               <p>Selecciona las rutas de salida relativas al directorio desde el que ejecutas la aplicación.</p>
             </div>
             <div class="form-grid two-columns">
@@ -185,9 +274,10 @@
             </div>
           </section>
 
-          <section id="advanced" class="panel" data-panel>
+          <section id="advanced" class="panel" data-panel tabindex="-1">
+            <div class="panel-accent" aria-hidden="true"></div>
             <div class="panel-heading">
-              <div><p class="eyebrow">Paso 6</p><h2>Opciones avanzadas</h2></div>
+              <div class="panel-title-group"><span class="panel-number">06</span><div><p class="eyebrow">Integraciones</p><h2>Opciones avanzadas</h2></div></div>
               <p>Cabeceras, proxies y configuración WebSocket opcional.</p>
             </div>
             <div class="form-grid two-columns">
@@ -201,6 +291,12 @@
             </details>
           </section>
         </form>
+
+        <footer class="workspace-footer">
+          <span>RamaCrawl Studio</span>
+          <span>Rust · Rama · Axum · SQLite</span>
+          <span>Local-first / authorization-first</span>
+        </footer>
       </section>
     </main>
   </div>
