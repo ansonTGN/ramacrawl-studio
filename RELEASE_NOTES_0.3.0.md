@@ -18,7 +18,7 @@
 ## Inicio
 
 ```bash
-cargo run --release -- serve --config config/salutmental.yaml
+cargo run --release -- serve --config config/example.yaml
 ```
 
 ## Migración

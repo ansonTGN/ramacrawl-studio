@@ -39,7 +39,7 @@ Cargo incorporará Axum 0.8.9 y actualizará `Cargo.lock` durante la primera com
 ```bash
 ./target/release/rama-controlled-extractor \
   serve \
-  --config config/salutmental.yaml
+  --config config/example.yaml
 ```
 
 El navegador se abrirá en `http://127.0.0.1:8090/`.

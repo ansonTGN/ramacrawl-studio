@@ -271,34 +271,40 @@ where
         return Ok(ProcessResult::Blocked(error.to_string()));
     }
 
-    let mut effective_delay_ms = crawler_cfg.min_delay_ms;
-    if crawler_cfg.respect_robots_txt {
-        let rules = load_robots(
-            &target.url,
-            policy,
-            network,
-            robots_cache,
-            limiter,
-            crawler_cfg.min_delay_ms,
-            crawler_cfg.robots_fail_closed,
-        )
-        .await;
-        if !rules.allowed(&crawler_cfg.robots_user_agent, &target.url) {
-            return Ok(ProcessResult::Blocked(
-                "robots.txt disallows URL".to_owned(),
-            ));
-        }
-        effective_delay_ms = effective_delay_ms.max(
-            rules
-                .crawl_delay_ms(&crawler_cfg.robots_user_agent)
-                .unwrap_or_default(),
-        );
-    }
-
-    let _permit = limiter
-        .acquire(&target.url, Duration::from_millis(effective_delay_ms))
+    let fetch = network
+        .fetch_with_request_guard(&target.url, |url| async move {
+            let mut delay_ms = crawler_cfg.min_delay_ms;
+            if crawler_cfg.respect_robots_txt {
+                let rules = load_robots(
+                    &url,
+                    policy,
+                    network,
+                    robots_cache,
+                    limiter,
+                    crawler_cfg.min_delay_ms,
+                    crawler_cfg.robots_fail_closed,
+                )
+                .await;
+                if !rules.allowed(&crawler_cfg.robots_user_agent, &url) {
+                    return Ok(None);
+                }
+                delay_ms = delay_ms.max(
+                    rules
+                        .crawl_delay_ms(&crawler_cfg.robots_user_agent)
+                        .unwrap_or_default(),
+                );
+            }
+            limiter
+                .acquire(&url, Duration::from_millis(delay_ms))
+                .await
+                .map(Some)
+        })
         .await?;
-    let fetch = network.fetch(&target.url).await?;
+    let Some(fetch) = fetch else {
+        return Ok(ProcessResult::Blocked(
+            "robots.txt disallows URL".to_owned(),
+        ));
+    };
     let body_sha256 = fingerprint::sha256(&fetch.body);
     let records = if (200..300).contains(&fetch.status) {
         extract::extract_records(
@@ -551,4 +557,123 @@ fn normalize_url(mut url: Url) -> Url {
         let _ = url.set_port(None);
     }
     url
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rama::{http::Body, service::service_fn};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn redirects_obey_destination_robots() -> Result<()> {
+        for (cross_origin, robots_status, denied, respect_robots) in [
+            (false, 200, true, true),
+            (true, 200, true, true),
+            (true, 503, false, true),
+            (true, 200, false, true),
+            (true, 200, true, false),
+        ] {
+            let directory = tempfile::tempdir()?;
+            let source = "http://127.0.0.1:8001";
+            let destination = if cross_origin {
+                "http://127.0.0.1:8002"
+            } else {
+                source
+            };
+            let config: AppConfig = serde_json::from_value(json!({
+                "crawler": {
+                    "seeds": [format!("{source}/start")],
+                    "allowed_domains": ["127.0.0.1"],
+                    "allowed_ports": [8001, 8002],
+                    "allow_private_networks": true,
+                    "respect_robots_txt": respect_robots,
+                    "robots_fail_closed": true,
+                    "min_delay_ms": 0,
+                    "per_host_concurrency": 1,
+                    "max_pages": 1,
+                    "discover_links": false,
+                    "retries": 2
+                },
+                "storage": {
+                    "sqlite_path": directory.path().join("pages.sqlite3").display().to_string(),
+                    "jsonl_path": directory.path().join("records.jsonl").display().to_string(),
+                    "summary_path": directory.path().join("summary.json").display().to_string()
+                }
+            }))?;
+            config.validate()?;
+            let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let seen = Arc::clone(&requests);
+            let client = service_fn(move |request: Request| {
+                seen.lock().push(request.uri().to_string());
+                async move {
+                    let url = Url::parse(&request.uri().to_string())?;
+                    let is_destination = url.port() == Some(8002) || !cross_origin;
+                    let mut response = Response::builder();
+                    let body = match url.path() {
+                        "/robots.txt" if is_destination => {
+                            response = response.status(robots_status);
+                            if denied {
+                                "User-agent: *\nDisallow: /private\n"
+                            } else {
+                                "User-agent: *\nAllow: /\n"
+                            }
+                        }
+                        "/robots.txt" => "User-agent: *\nAllow: /\n",
+                        "/start" => {
+                            response = response.status(302).header("location", "/step");
+                            ""
+                        }
+                        "/step" => {
+                            response = response
+                                .status(302)
+                                .header("location", format!("{destination}/private"));
+                            ""
+                        }
+                        "/private" => "private content",
+                        other => return Err(anyhow!("unexpected fixture path: {other}").into()),
+                    };
+                    Ok::<_, BoxError>(response.body(Body::from(body))?)
+                }
+            });
+            let database_path = config.storage.sqlite_path.clone();
+            let summary =
+                tokio::time::timeout(Duration::from_secs(5), run(config, client)).await??;
+            let blocked = respect_robots && (denied || robots_status != 200);
+            assert_eq!(summary.pages_blocked, usize::from(blocked));
+            assert_eq!(summary.pages_fetched, usize::from(!blocked));
+            assert_eq!(summary.pages_failed, 0);
+
+            let mut expected = Vec::new();
+            if respect_robots {
+                expected.push(format!("{source}/robots.txt"));
+            }
+            expected.extend([format!("{source}/start"), format!("{source}/step")]);
+            if respect_robots && cross_origin {
+                let attempts = if robots_status == 503 { 3 } else { 1 };
+                expected.extend(std::iter::repeat_n(
+                    format!("{destination}/robots.txt"),
+                    attempts,
+                ));
+            }
+            if !blocked {
+                expected.push(format!("{destination}/private"));
+                let connection = rusqlite::Connection::open(database_path)?;
+                let (requested, final_url, redirects): (String, String, String) = connection
+                    .query_row(
+                        "SELECT requested_url, final_url, redirect_chain_json FROM pages",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                assert_eq!(requested, format!("{source}/start"));
+                assert_eq!(final_url, format!("{destination}/private"));
+                assert_eq!(
+                    serde_json::from_str::<Vec<String>>(&redirects)?,
+                    vec![format!("{source}/step"), final_url]
+                );
+            }
+            assert_eq!(*requests.lock(), expected);
+        }
+        Ok(())
+    }
 }

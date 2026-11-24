@@ -3,10 +3,16 @@
 ## Inicio
 
 ```bash
-cargo run --release -- serve --config config/salutmental.yaml
+cargo run --release -- serve
 ```
 
 El navegador se abre en `http://127.0.0.1:8090/`.
+
+El inicio usa `config/example.yaml`, incluido en el repositorio. Para trabajar
+con una copia local, ejecuta `cp config/example.yaml config/local.yaml` y añade
+`--config config/local.yaml` al comando. `make serve` y `scripts/run-web.sh`
+también usan el ejemplo por defecto; aceptan `CONFIG=config/local.yaml` y
+`config/local.yaml` como argumento, respectivamente.
 
 ## Flujo de trabajo
 
@@ -18,6 +24,13 @@ El navegador se abre en `http://127.0.0.1:8090/`.
 6. Pulsa **Guardar** para reemplazar el YAML de forma atómica.
 7. Pulsa **Iniciar escaneo**.
 8. Consulta el progreso y abre **Ver resultados** al finalizar.
+
+El backend comprueba la sintaxis CSS de los selectores de enlaces, elementos y
+campos, y la sintaxis JSONPath de las reglas JSON/NDJSON y WebSocket antes de
+guardar o iniciar un escaneo. El JSONPath admitido incluye campos (`$.items`),
+índices (`$[0]`), comodines (`$[*]`) y campos entre comillas (`$['display-name']`).
+Usa la notación entre corchetes para nombres con espacios o signos; las
+secuencias de escape y los caracteres de control no están admitidos.
 
 ## API local
 

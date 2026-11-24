@@ -1,6 +1,6 @@
 .PHONY: serve validate crawl dashboard verify fmt check test clippy check-boring docker-build
 
-CONFIG ?= config/salutmental.yaml
+CONFIG ?= config/example.yaml
 
 serve:
 	cargo run --release -- serve --config $(CONFIG)

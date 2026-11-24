@@ -7,7 +7,7 @@ services:
     command:
       - serve
       - --config
-      - /data/config/salutmental.yaml
+      - /data/config/example.yaml
       - --bind
       - 0.0.0.0:8090
       - --allow-remote

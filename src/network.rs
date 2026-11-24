@@ -140,13 +140,33 @@ where
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<FetchResult> {
+        self.fetch_with_request_guard(url, |_| async { Ok(Some(())) })
+            .await?
+            .context("request blocked")
+    }
+
+    /// Checks every request, including redirects and retries. The returned guard
+    /// is held through body collection; `None` blocks the fetch without retrying.
+    pub async fn fetch_with_request_guard<F, Fut, G>(
+        &self,
+        url: &Url,
+        before_request: F,
+    ) -> Result<Option<FetchResult>>
+    where
+        F: Fn(Url) -> Fut,
+        Fut: Future<Output = Result<Option<G>>>,
+    {
         let proxy = self.next_proxy();
         let mut last_error = None;
         for attempt in 0..=self.cfg.retries {
-            match self.fetch_attempt(url, proxy.as_deref()).await {
-                Ok(result) if !is_retryable_status(result.status) => return Ok(result),
-                Ok(result) if attempt == self.cfg.retries => return Ok(result),
-                Ok(result) => {
+            match self
+                .fetch_attempt(url, proxy.as_deref(), &before_request)
+                .await
+            {
+                Ok(None) => return Ok(None),
+                Ok(Some(result)) if !is_retryable_status(result.status) => return Ok(Some(result)),
+                Ok(Some(result)) if attempt == self.cfg.retries => return Ok(Some(result)),
+                Ok(Some(result)) => {
                     tracing::warn!(
                         url = %url,
                         status = result.status,
@@ -165,13 +185,25 @@ where
         Err(last_error.unwrap_or_else(|| anyhow!("request exhausted retry policy")))
     }
 
-    async fn fetch_attempt(&self, requested_url: &Url, proxy: Option<&str>) -> Result<FetchResult> {
+    async fn fetch_attempt<F, Fut, G>(
+        &self,
+        requested_url: &Url,
+        proxy: Option<&str>,
+        before_request: &F,
+    ) -> Result<Option<FetchResult>>
+    where
+        F: Fn(Url) -> Fut,
+        Fut: Future<Output = Result<Option<G>>>,
+    {
         let started = Instant::now();
         let mut current = requested_url.clone();
         let mut redirects = Vec::new();
 
         for redirect_index in 0..=self.cfg.redirect_limit {
             self.policy.validate_network_destination(&current).await?;
+            let Some(_guard) = before_request(current.clone()).await? else {
+                return Ok(None);
+            };
             let request = self.build_request(&current, proxy)?;
             let request_header_fingerprint = fingerprint::request_fingerprint(
                 request.method(),
@@ -228,7 +260,7 @@ where
                 .map_err(|error| anyhow!(error.to_string()))?
                 .into_bytes();
 
-            return Ok(FetchResult {
+            return Ok(Some(FetchResult {
                 requested_url: requested_url.clone(),
                 final_url: current,
                 status: status.as_u16(),
@@ -241,7 +273,7 @@ where
                 proxy: proxy.map(sanitized_proxy_label),
                 request_header_fingerprint,
                 response_fingerprint,
-            });
+            }));
         }
         bail!("redirect state machine terminated unexpectedly")
     }

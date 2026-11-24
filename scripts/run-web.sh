@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="${1:-config/salutmental.yaml}"
+CONFIG="${1:-config/example.yaml}"
 BIND="${RAMA_BIND:-127.0.0.1:8090}"
 
 if ! command -v cargo >/dev/null 2>&1; then

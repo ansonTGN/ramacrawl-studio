@@ -65,7 +65,7 @@ enum Command {
         output: PathBuf,
     },
     Serve {
-        #[arg(short, long, default_value = "config/salutmental.yaml")]
+        #[arg(short, long, default_value = "config/example.yaml")]
         config: PathBuf,
         #[arg(long, default_value = "127.0.0.1:8090")]
         bind: SocketAddr,

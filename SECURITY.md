@@ -8,6 +8,7 @@ El extractor procesa URLs y contenido remoto no confiable. Los riesgos principal
 
 - allowlist obligatorio de dominios y puertos;
 - validación de cada redirect;
+- comprobación de `robots.txt` y límites por host antes de cada petición de contenido, incluidos redirects y reintentos;
 - bloqueo de credenciales embebidas en URL;
 - resolución DNS previa y bloqueo de rangos privados/especiales;
 - bloqueo de IPv4 mapeada en IPv6;

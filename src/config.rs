@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use rama::http::{HeaderName, HeaderValue};
+use scraper::Selector;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
 use tokio::fs;
@@ -264,6 +265,35 @@ impl AppConfig {
                 .validate_url(seed)
                 .with_context(|| format!("seed is outside crawler policy: {seed}"))?;
         }
+        validate_selector(&self.crawler.link_selector).context("invalid crawler.link_selector")?;
+        for rule in &self.extraction.rules {
+            match rule {
+                ExtractionRule::HtmlRecords {
+                    name,
+                    item_selector,
+                    fields,
+                } => {
+                    validate_selector(item_selector).with_context(|| {
+                        format!("invalid item_selector in extraction rule {name:?}")
+                    })?;
+                    for (field_name, field) in fields {
+                        validate_selector(&field.selector).with_context(|| {
+                            format!("invalid selector for field {field_name:?} in extraction rule {name:?}")
+                        })?;
+                    }
+                }
+                ExtractionRule::JsonPath { name, path, fields }
+                | ExtractionRule::NdjsonPath { name, path, fields } => {
+                    crate::json_path::validate(path)
+                        .with_context(|| format!("invalid JSONPath in extraction rule {name:?}"))?;
+                    for (field_name, field_path) in fields {
+                        crate::json_path::validate(field_path).with_context(|| {
+                            format!("invalid JSONPath for field {field_name:?} in extraction rule {name:?}")
+                        })?;
+                    }
+                }
+            }
+        }
         if let Some(websocket) = &self.websocket {
             let mut validation_url = websocket.url.clone();
             match websocket.url.scheme() {
@@ -286,9 +316,19 @@ impl AppConfig {
             if websocket.output_path.trim().is_empty() {
                 bail!("websocket.output_path cannot be empty");
             }
+            for path in &websocket.json_paths {
+                crate::json_path::validate(path)
+                    .context("invalid websocket.json_paths JSONPath")?;
+            }
         }
         Ok(())
     }
+}
+
+fn validate_selector(selector: &str) -> Result<()> {
+    Selector::parse(selector)
+        .map(|_| ())
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 fn default_allowed_ports() -> Vec<u16> {
@@ -353,4 +393,98 @@ fn default_bodies_dir() -> String {
 }
 fn default_ws_output_path() -> String {
     "output/websocket.jsonl".to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn valid_config() -> Value {
+        json!({
+            "crawler": {
+                "seeds": ["https://example.com/"],
+                "allowed_domains": ["example.com"],
+                "link_selector": "a[href]"
+            },
+            "extraction": {"rules": [
+                {"kind": "html_records", "name": "html", "item_selector": "article",
+                 "fields": {"title": {"selector": "h1"}}},
+                {"kind": "json_path", "name": "json", "path": "$.items[*]",
+                 "fields": {"title": "$.name"}},
+                {"kind": "ndjson_path", "name": "ndjson", "path": "$",
+                 "fields": {"title": "$['display-name']"}}
+            ]},
+            "websocket": {"url": "wss://example.com/events", "json_paths": ["$.items[0]"]}
+        })
+    }
+
+    #[test]
+    fn accepts_valid_selectors_and_bundled_example() -> Result<()> {
+        let config: AppConfig = serde_json::from_value(valid_config())?;
+        config.validate()?;
+        let example: AppConfig = serde_yaml::from_str(include_str!("../config/example.yaml"))?;
+        example.validate()
+    }
+
+    #[test]
+    fn rejects_invalid_css_selectors() -> Result<()> {
+        for (pointer, context) in [
+            ("/crawler/link_selector", "crawler.link_selector"),
+            ("/extraction/rules/0/item_selector", "item_selector"),
+            (
+                "/extraction/rules/0/fields/title/selector",
+                "field \"title\"",
+            ),
+        ] {
+            let mut value = valid_config();
+            *value
+                .pointer_mut(pointer)
+                .context("missing fixture selector")? = json!("[");
+            let config: AppConfig = serde_json::from_value(value)?;
+            let error = config
+                .validate()
+                .err()
+                .context("invalid CSS was accepted")?;
+            assert!(error.to_string().contains(context), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_json_paths() -> Result<()> {
+        for pointer in [
+            "/extraction/rules/1/path",
+            "/extraction/rules/1/fields/title",
+            "/extraction/rules/2/path",
+            "/extraction/rules/2/fields/title",
+            "/websocket/json_paths/0",
+        ] {
+            let mut value = valid_config();
+            *value
+                .pointer_mut(pointer)
+                .context("missing fixture JSONPath")? = json!("$.items[");
+            let config: AppConfig = serde_json::from_value(value)?;
+            let error = config
+                .validate()
+                .err()
+                .context("invalid JSONPath was accepted")?;
+            assert!(error.to_string().contains("JSONPath"), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn invalid_selectors_do_not_replace_saved_config() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("config.yaml");
+        let config: AppConfig = serde_json::from_value(valid_config())?;
+        config.save(&path).await?;
+        let original = fs::read(&path).await?;
+        let mut invalid = config;
+        invalid.crawler.link_selector = "[".to_owned();
+        assert!(invalid.save(&path).await.is_err());
+        assert_eq!(fs::read(&path).await?, original);
+        Ok(())
+    }
 }
