@@ -556,3 +556,7 @@ code, pre { font-family: var(--font-mono); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+.history-table-wrap { overflow-x: auto; }
+.history-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+.history-table th, .history-table td { padding: 10px 8px; text-align: left; border-bottom: 1px solid rgba(127, 127, 127, .25); white-space: nowrap; }

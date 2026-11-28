@@ -47,6 +47,7 @@ const ids = {
   summaryPath: byId('summaryPath'),
   bodiesDir: byId('bodiesDir'),
   saveBodies: byId('saveBodies'),
+  incremental: byId('incremental'),
   customHeaders: byId('customHeaders'),
   proxies: byId('proxies'),
   websocketConfig: byId('websocketConfig'),
@@ -144,6 +145,8 @@ function fillForm(config) {
   ids.summaryPath.value = storage.summary_path || 'output/summary.json';
   ids.bodiesDir.value = storage.bodies_dir || 'output/bodies';
   ids.saveBodies.checked = Boolean(storage.save_bodies);
+  ids.incremental.checked = Boolean(crawler.incremental);
+  updateIncrementalMode();
   ids.websocketConfig.value = JSON.stringify(config.websocket ?? null, null, 2);
   validateRulesEditor();
 }
@@ -239,6 +242,7 @@ function readForm() {
   const maxBodyMb = numberValue(ids.maxBodyMb, 'Cuerpo máximo', { integer: false, min: 0.1 });
   const config = {
     crawler: {
+      incremental: ids.incremental.checked,
       seeds,
       allowed_domains: allowedDomains,
       denied_path_prefixes: lines(ids.deniedPaths.value),
@@ -326,6 +330,7 @@ async function loadApplication() {
     updateStatus(status);
     setConnection(true);
     validateClientSide(false);
+    await loadHistory();
   } catch (error) {
     setConnection(false);
     showAlert(error.message);
@@ -340,6 +345,7 @@ function schedulePoll() {
       const status = await api('/api/status');
       setConnection(true);
       updateStatus(status);
+      if (byId('storage').classList.contains('active')) await loadHistory();
     } catch (error) {
       setConnection(false);
       console.error(error);
@@ -398,6 +404,32 @@ function updateStatus(status) {
     }
   });
   scanButton.disabled = state.running || !validateClientSide(false);
+  updateIncrementalMode();
+}
+
+function updateIncrementalMode() {
+  if (ids.incremental.checked) ids.cleanOutput.checked = false;
+  ids.cleanOutput.disabled = state.running || ids.incremental.checked;
+}
+
+async function loadHistory() {
+  try {
+    const history = await api('/api/history?limit=20');
+    const rows = history.map((run) => {
+      const row = document.createElement('tr');
+      const cells = [new Date(run.finished_at).toLocaleString('es-ES'), run.pages_fetched || 0, run.pages_new || 0, run.pages_changed || 0, run.pages_unchanged || 0, run.pages_failed || 0];
+      for (const value of cells) {
+        const cell = document.createElement('td');
+        cell.textContent = String(value);
+        row.append(cell);
+      }
+      return row;
+    });
+    byId('historyRows').replaceChildren(...rows);
+    byId('historyStatus').textContent = history.length ? 'Últimas ejecuciones completadas de esta base de datos.' : 'Sin ejecuciones registradas.';
+  } catch (error) {
+    byId('historyStatus').textContent = `No se pudo cargar el historial: ${error.message}`;
+  }
 }
 
 function setConnection(online) {
@@ -573,6 +605,7 @@ for (const button of navigationButtons) {
 }
 
 ids.userAgentProfile.addEventListener('change', updateCustomProfileVisibility);
+ids.incremental.addEventListener('change', updateIncrementalMode);
 ids.extractionRules.addEventListener('input', validateRulesEditor);
 byId('formatRulesButton').addEventListener('click', formatRules);
 byId('articlePresetButton').addEventListener('click', loadArticlePreset);

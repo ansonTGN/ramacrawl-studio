@@ -271,7 +271,14 @@
               <label class="field"><span>Resumen JSON</span><input id="summaryPath" type="text" spellcheck="false"></label>
               <label class="field"><span>Directorio de cuerpos</span><input id="bodiesDir" type="text" spellcheck="false"></label>
               <label class="toggle full"><input id="saveBodies" type="checkbox"><span></span><div><strong>Guardar cuerpos descargados</strong><small>Puede consumir bastante espacio y almacenar información sensible.</small></div></label>
+              <label class="toggle full"><input id="incremental" type="checkbox"><span></span><div><strong>Monitorización incremental</strong><small>Conserva la base de comparación, usa validadores HTTP y extrae solo contenido nuevo o modificado.</small></div></label>
             </div>
+            <h3>Historial de ejecuciones</h3>
+            <p id="historyStatus" role="status">Sin ejecuciones registradas.</p>
+            <div class="history-table-wrap"><table class="history-table" aria-label="Últimas ejecuciones">
+              <thead><tr><th scope="col">Finalización</th><th scope="col">Páginas</th><th scope="col">Nuevas</th><th scope="col">Modificadas</th><th scope="col">Sin cambios</th><th scope="col">Errores</th></tr></thead>
+              <tbody id="historyRows"></tbody>
+            </table></div>
           </section>
 
           <section id="advanced" class="panel" data-panel tabindex="-1">

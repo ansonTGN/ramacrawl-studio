@@ -19,6 +19,8 @@ pub struct AppConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlerConfig {
+    #[serde(default)]
+    pub incremental: bool,
     pub seeds: Vec<Url>,
     pub allowed_domains: Vec<String>,
     #[serde(default)]

@@ -1,5 +1,8 @@
 use crate::{
-    config::CrawlerConfig, fingerprint, model::FetchResult, policy::UrlPolicy,
+    config::CrawlerConfig,
+    fingerprint,
+    model::{CachedPage, FetchResult},
+    policy::UrlPolicy,
     user_agent::RequestProfile,
 };
 use anyhow::{Context, Result, anyhow, bail};
@@ -8,9 +11,8 @@ use rama::{
     error::BoxError,
     extensions::ExtensionsRef,
     http::{
-        Body, BodyExtractExt, HeaderName, HeaderValue, Method, Request, Response, StatusCode,
-        Version,
-        body::CollectOptions,
+        Body, HeaderName, HeaderValue, Method, Request, Response, StatusCode, Version,
+        body::{CollectOptions, util::BodyExt},
         client::{EasyHttpWebClient, HttpPooledConnectorConfig},
         layer::{decompression::DecompressionLayer, map_response_body::MapResponseBodyLayer},
     },
@@ -140,7 +142,7 @@ where
     }
 
     pub async fn fetch(&self, url: &Url) -> Result<FetchResult> {
-        self.fetch_with_request_guard(url, |_| async { Ok(Some(())) })
+        self.fetch_with_request_guard(url, None, |_| async { Ok(Some(())) })
             .await?
             .context("request blocked")
     }
@@ -150,6 +152,7 @@ where
     pub async fn fetch_with_request_guard<F, Fut, G>(
         &self,
         url: &Url,
+        cached: Option<&CachedPage>,
         before_request: F,
     ) -> Result<Option<FetchResult>>
     where
@@ -160,7 +163,7 @@ where
         let mut last_error = None;
         for attempt in 0..=self.cfg.retries {
             match self
-                .fetch_attempt(url, proxy.as_deref(), &before_request)
+                .fetch_attempt(url, proxy.as_deref(), cached, &before_request)
                 .await
             {
                 Ok(None) => return Ok(None),
@@ -189,6 +192,7 @@ where
         &self,
         requested_url: &Url,
         proxy: Option<&str>,
+        cached: Option<&CachedPage>,
         before_request: &F,
     ) -> Result<Option<FetchResult>>
     where
@@ -204,7 +208,21 @@ where
             let Some(_guard) = before_request(current.clone()).await? else {
                 return Ok(None);
             };
-            let request = self.build_request(&current, proxy)?;
+            let mut request = self.build_request(&current, proxy)?;
+            if let Some(cached) = cached.filter(|cached| cached.final_url == current) {
+                if let Some(etag) = &cached.etag {
+                    request.headers_mut().insert(
+                        HeaderName::from_static("if-none-match"),
+                        HeaderValue::try_from(etag.as_str())?,
+                    );
+                }
+                if let Some(modified) = &cached.last_modified {
+                    request.headers_mut().insert(
+                        HeaderName::from_static("if-modified-since"),
+                        HeaderValue::try_from(modified.as_str())?,
+                    );
+                }
+            }
             let request_header_fingerprint = fingerprint::request_fingerprint(
                 request.method(),
                 request.version(),
@@ -229,7 +247,7 @@ where
             let response_fingerprint =
                 fingerprint::response_fingerprint(status.as_u16(), version, &headers);
 
-            if status.is_redirection() {
+            if status.is_redirection() && status != StatusCode::NOT_MODIFIED {
                 if redirect_index == self.cfg.redirect_limit {
                     bail!("redirect limit exceeded for {requested_url}");
                 }
@@ -255,10 +273,12 @@ where
                 .with_max_size(self.cfg.max_body_bytes)
                 .with_timeout(Duration::from_secs(self.cfg.timeout_secs));
             let body = response
-                .try_into_string_with(options)
+                .into_body()
+                .collect_with(options)
                 .await
                 .map_err(|error| anyhow!(error.to_string()))?
-                .into_bytes();
+                .to_bytes()
+                .to_vec();
 
             return Ok(Some(FetchResult {
                 requested_url: requested_url.clone(),

@@ -42,6 +42,12 @@ enum Command {
         #[arg(short, long)]
         config: PathBuf,
     },
+    Watch {
+        #[arg(short, long, default_value = "config/example.yaml")]
+        config: PathBuf,
+        #[arg(long, default_value_t = 3600, value_parser = clap::value_parser!(u64).range(1..=31_536_000))]
+        interval_secs: u64,
+    },
     JsonStream {
         #[arg(short, long)]
         config: PathBuf,
@@ -95,6 +101,35 @@ async fn main() -> Result<()> {
             let client = network::build_client(&cfg.crawler)?;
             let summary = crawler::run(cfg, client).await?;
             println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        Command::Watch {
+            config,
+            interval_secs,
+        } => {
+            let cfg = AppConfig::load(config).await?;
+            if !cfg.crawler.incremental {
+                bail!(
+                    "watch requires crawler.incremental: true to preserve the monitoring baseline"
+                );
+            }
+            let client = network::build_client(&cfg.crawler)?;
+            let limiter =
+                std::sync::Arc::new(crawler::HostLimiter::new(cfg.crawler.per_host_concurrency));
+            let shutdown = tokio::signal::ctrl_c();
+            tokio::pin!(shutdown);
+            loop {
+                tokio::select! {
+                    result = &mut shutdown => { result.context("cannot receive shutdown signal")?; break; }
+                    result = crawler::run_with_limiter(cfg.clone(), client.clone(), |_| {}, std::sync::Arc::clone(&limiter)) => {
+                        let summary = result?;
+                        println!("{}", serde_json::to_string(&summary)?);
+                    }
+                }
+                tokio::select! {
+                    result = &mut shutdown => { result.context("cannot receive shutdown signal")?; break; }
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(interval_secs)) => {}
+                }
+            }
         }
         Command::JsonStream {
             config,

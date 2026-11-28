@@ -13,6 +13,8 @@ pub struct CrawlTarget {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PageRecord {
+    #[serde(default)]
+    pub change: Option<PageChange>,
     pub crawl_id: String,
     pub requested_url: String,
     pub final_url: String,
@@ -62,6 +64,8 @@ pub struct FetchResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlProgress {
+    #[serde(flatten)]
+    pub changes: ChangeCounts,
     pub crawl_id: String,
     pub updated_at: DateTime<Utc>,
     pub pages_scheduled: usize,
@@ -77,6 +81,8 @@ pub struct CrawlProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrawlSummary {
+    #[serde(flatten)]
+    pub changes: ChangeCounts,
     pub crawl_id: String,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
@@ -86,4 +92,42 @@ pub struct CrawlSummary {
     pub pages_blocked: usize,
     pub records_extracted: usize,
     pub bytes_downloaded: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PageChange {
+    New,
+    Changed,
+    Unchanged,
+}
+
+impl PageChange {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Changed => "changed",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChangeCounts {
+    #[serde(default)]
+    pub pages_new: usize,
+    #[serde(default)]
+    pub pages_changed: usize,
+    #[serde(default)]
+    pub pages_unchanged: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CachedPage {
+    pub final_url: Url,
+    pub etag: Option<String>,
+    pub last_modified: Option<String>,
+    pub content_type: Option<String>,
+    pub body_sha256: String,
+    pub links: Vec<Url>,
 }

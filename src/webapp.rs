@@ -3,12 +3,13 @@ use crate::{
     crawler, dashboard,
     model::{CrawlProgress, CrawlSummary},
     network,
+    storage::Storage,
 };
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, State},
+    extract::{DefaultBodyLimit, Query, State},
     http::{HeaderName, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -74,6 +75,11 @@ struct ScanRequest {
     config: AppConfig,
     #[serde(default)]
     clean_output: bool,
+}
+
+#[derive(Deserialize)]
+struct HistoryQuery {
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -167,6 +173,7 @@ pub async fn serve(
         .route("/api/scan", post(start_scan))
         .route("/api/scan/cancel", post(cancel_scan))
         .route("/api/status", get(get_status))
+        .route("/api/history", get(get_history))
         .route("/dashboard", get(show_dashboard))
         .layer(DefaultBodyLimit::max(1_048_576))
         .with_state(state);
@@ -248,6 +255,11 @@ async fn start_scan(
     config.validate().map_err(ApiError::bad_request)?;
     let mut task_slot = state.task.lock().await;
     ensure_not_running(&state)?;
+    if config.crawler.incremental && clean_output {
+        return Err(ApiError::bad_request(
+            "El modo incremental requiere conservar las salidas; desactiva Inicio limpio.",
+        ));
+    }
     config
         .save(state.config_path.as_ref())
         .await
@@ -289,8 +301,9 @@ async fn start_scan(
             let mut runtime = progress_runtime.write();
             if runtime.phase == ScanPhase::Running {
                 runtime.message = format!(
-                    "Procesadas {completed} de {} páginas programadas; {} registros extraídos.",
-                    progress.pages_scheduled, progress.records_extracted
+                    "Procesadas {completed} de {} páginas; {} registros. Nuevas: {}, modificadas: {}, sin cambios: {}.",
+                    progress.pages_scheduled, progress.records_extracted,
+                    progress.changes.pages_new, progress.changes.pages_changed, progress.changes.pages_unchanged
                 );
                 runtime.progress = Some(progress);
             }
@@ -307,8 +320,12 @@ async fn start_scan(
                     Ok(_) => {
                         runtime.dashboard_path = Some(dashboard_path);
                         runtime.message = format!(
-                            "Escaneo completado: {} páginas y {} registros.",
-                            summary.pages_fetched, summary.records_extracted
+                            "Escaneo completado: {} páginas y {} registros. Nuevas: {}, modificadas: {}, sin cambios: {}.",
+                            summary.pages_fetched,
+                            summary.records_extracted,
+                            summary.changes.pages_new,
+                            summary.changes.pages_changed,
+                            summary.changes.pages_unchanged
                         );
                     }
                     Err(error) => {
@@ -348,6 +365,19 @@ async fn cancel_scan(State(state): State<WebState>) -> Result<Json<StatusRespons
 
 async fn get_status(State(state): State<WebState>) -> Json<StatusResponse> {
     Json(status_response(&state))
+}
+
+async fn get_history(
+    State(state): State<WebState>,
+    Query(query): Query<HistoryQuery>,
+) -> Result<Json<Vec<CrawlSummary>>, ApiError> {
+    let config = AppConfig::load(state.config_path.as_ref())
+        .await
+        .map_err(ApiError::internal)?;
+    Storage::history(config.storage.sqlite_path, query.limit.unwrap_or(20))
+        .await
+        .map(Json)
+        .map_err(ApiError::internal)
 }
 
 async fn show_dashboard(State(state): State<WebState>) -> Result<Response, ApiError> {

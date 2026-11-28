@@ -16,7 +16,7 @@ pub fn extract_records(
     content_type: Option<&str>,
     body: &[u8],
     rules: &[ExtractionRule],
-) -> Vec<ExtractedRecord> {
+) -> Result<Vec<ExtractedRecord>> {
     let mut output = Vec::new();
     for rule in rules {
         let result = match rule {
@@ -39,12 +39,10 @@ pub fn extract_records(
             }
             _ => continue,
         };
-        match result {
-            Ok(mut records) => output.append(&mut records),
-            Err(error) => tracing::warn!(rule = ?rule, %error, "extraction rule failed"),
-        }
+        let mut records = result.with_context(|| format!("extraction rule failed: {rule:?}"))?;
+        output.append(&mut records);
     }
-    output
+    Ok(output)
 }
 
 pub fn discover_links(base: &Url, body: &[u8], selector: &str) -> Result<Vec<Url>> {

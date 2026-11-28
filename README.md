@@ -46,6 +46,17 @@ Typical use cases include:
 - Open an HTML dashboard with the extracted results.
 - No external JavaScript libraries or cloud services are required.
 - Binds to `127.0.0.1` by default.
+- Incremental mode and execution history from the local database.
+
+### Periodic and incremental monitoring
+
+- Conditional HTTP requests through Rama using `ETag` and `Last-Modified`.
+- SHA-256 classification of new, changed and unchanged content, including servers without validators.
+- Cached links on `304 Not Modified` so unchanged index pages do not hide changes in child pages.
+- Configuration-isolated baselines; validators are sent only to their corresponding final URL.
+- SQLite run history and per-page change classification.
+- Non-overlapping periodic scans with the `watch` command and shared host limits between cycles.
+- JSONL remains a history of extracted records: unchanged pages keep their previous results without adding duplicate records.
 
 ### Controlled crawling
 
@@ -252,6 +263,39 @@ RUST_LOG=info \
   crawl \
   --config config/local.yaml
 ```
+
+### Monitor periodically
+
+Set `crawler.incremental: true` in `config/local.yaml`, then run:
+
+```bash
+./target/release/rama-controlled-extractor \
+  watch --config config/local.yaml --interval-secs 3600
+```
+
+The first scan establishes the baseline. Subsequent scans reuse HTTP validators
+and extract records only for new or changed successful responses. Servers without
+validators are compared by body hash. HTTP and extraction errors are recorded as
+failures and do not replace the last successful baseline. `Ctrl+C` stops monitoring.
+
+The interval (1 second to 365 days) is measured after each completed scan. Scans
+never overlap within one `watch` process, and host delays remain in effect between
+cycles. Configuration is loaded at startup; restart `watch` after editing it.
+
+The web panel supports incremental single scans and displays the latest 20
+completed runs under **Storage**. It can display history while a separate `watch`
+process uses the same database. Use one crawling writer per database; the panel
+does not coordinate concurrent scans with other processes.
+
+Incremental mode disables **Clean start**, and the API rejects requests that
+combine them. The database gains additive `url_cache` and `crawl_runs` tables and
+a nullable `pages.change_type` column; existing results are preserved. Old summaries
+remain readable. Changing configuration or software version establishes a fresh
+baseline for that configuration. History and cache grow over time; configure
+backup and retention externally rather than deleting outputs between scans.
+
+Conditional requests follow the semantics of [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html#name-conditional-requests).
+Conditional page requests still go through Rama and the existing URL, robots and host-limit checks.
 
 ### Generate a results dashboard
 
@@ -536,13 +580,15 @@ Do not use this project to bypass authentication, anti-bot controls, access rest
 - [ ] Authentication for optional remote deployments.
 - [ ] Server-Sent Events for push-based scan progress.
 - [ ] Visual extraction-rule builder.
-- [ ] Scheduled scans.
-- [ ] Incremental crawl and content-change detection.
+- [x] Periodic CLI monitoring with non-overlapping scans.
+- [x] Incremental crawl and content-change detection.
+- [ ] Persisted schedules and monitoring jobs managed from the web panel.
 - [ ] CSV and Parquet exporters.
 - [ ] OpenTelemetry and Prometheus integration.
 - [ ] Per-domain policy profiles.
 - [ ] Pluggable storage backends.
 - [ ] Internationalized web interface.
+- [ ] Shared Retry-After cooldowns, durable frontier/resume and pinned DNS destinations.
 
 ## Project status
 

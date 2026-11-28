@@ -3,6 +3,7 @@
 # fingerprints y persistencia sin generar una carga innecesaria.
 
 crawler:
+  incremental: false
   seeds:
     - "https://www.salutmental.org/"
     - "https://www.salutmental.org/noticies/"

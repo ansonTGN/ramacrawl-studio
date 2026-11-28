@@ -42,7 +42,25 @@ secuencias de escape y los caracteres de control no están admitidos.
 | POST | `/api/scan` | Guarda e inicia un escaneo |
 | POST | `/api/scan/cancel` | Cancela el escaneo activo |
 | GET | `/api/status` | Devuelve estado, progreso y resumen |
+| GET | `/api/history?limit=20` | Historial persistente de ejecuciones completadas; límite entre 1 y 100 |
 | GET | `/dashboard` | Muestra los resultados generados |
+
+## Monitorización incremental
+
+Activa **Monitorización incremental** en Almacenamiento. El panel desactiva
+**Inicio limpio** para conservar la base de comparación; la API rechaza esa
+combinación antes de guardar o limpiar archivos. Los contadores indican páginas
+nuevas, modificadas y sin cambios. El historial de Almacenamiento se actualiza
+automáticamente mientras esa sección está abierta, incluso si `watch` realiza
+las ejecuciones desde otro proceso. Evita iniciar dos escritores sobre la misma
+base de datos.
+
+Para escaneos periódicos usa `watch --config config/local.yaml --interval-secs 3600`
+con `crawler.incremental: true`. El proceso reutiliza el cliente Rama, conserva
+los límites por host entre ciclos y espera el intervalo tras completar cada
+ejecución. Reinícialo para aplicar cambios de configuración. Solo las ejecuciones
+completadas aparecen en el historial; las páginas ya persistidas se conservan
+si se cancela una ejecución.
 
 ## Seguridad
 

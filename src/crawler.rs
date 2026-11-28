@@ -1,7 +1,9 @@
 use crate::{
     config::AppConfig,
     extract, fingerprint,
-    model::{CrawlProgress, CrawlSummary, CrawlTarget, PageRecord},
+    model::{
+        CachedPage, ChangeCounts, CrawlProgress, CrawlSummary, CrawlTarget, PageChange, PageRecord,
+    },
     network::NetworkEngine,
     policy::UrlPolicy,
     robots::{RobotsCache, RobotsRules},
@@ -47,7 +49,25 @@ where
     S::Error: Into<BoxError> + Send + Sync + 'static,
     F: Fn(CrawlProgress) + Send + Sync + 'static,
 {
+    let limiter = Arc::new(HostLimiter::new(config.crawler.per_host_concurrency));
+    run_with_limiter(config, client, report, limiter).await
+}
+
+pub async fn run_with_limiter<S, F>(
+    config: AppConfig,
+    client: S,
+    report: F,
+    limiter: Arc<HostLimiter>,
+) -> Result<CrawlSummary>
+where
+    S: Service<Request, Output = Response> + Clone + Send + Sync + 'static,
+    S::Error: Into<BoxError> + Send + Sync + 'static,
+    F: Fn(CrawlProgress) + Send + Sync + 'static,
+{
     let started_at = Utc::now();
+    // shortcut: hash all settings for isolation; narrow the key if harmless edits cause excessive refetching.
+    let cache_context: Arc<str> =
+        fingerprint::sha256(&serde_json::to_vec(&(env!("CARGO_PKG_VERSION"), &config))?).into();
     let crawl_id = Uuid::new_v4().to_string();
     let crawler_cfg = Arc::new(config.crawler.clone());
     let extraction_cfg = Arc::new(config.extraction.clone());
@@ -62,18 +82,24 @@ where
     ));
     let storage = Storage::open(config.storage).await?;
     let robots = Arc::new(RobotsCache::default());
-    let limiter = Arc::new(HostLimiter::new(crawler_cfg.per_host_concurrency));
 
     let mut queue = VecDeque::new();
+    let mut visited = HashSet::<String>::new();
     for seed in &crawler_cfg.seeds {
+        let url = normalize_url(seed.clone());
+        if queue.len() >= crawler_cfg.max_pages {
+            break;
+        }
+        if !visited.insert(url.to_string()) {
+            continue;
+        }
         queue.push_back(CrawlTarget {
-            url: normalize_url(seed.clone()),
+            url,
             depth: 0,
             parent: None,
         });
     }
 
-    let mut visited = HashSet::<String>::new();
     let mut join_set = JoinSet::new();
     let mut pages_scheduled = 0usize;
     let mut pages_fetched = 0usize;
@@ -81,6 +107,7 @@ where
     let mut pages_blocked = 0usize;
     let mut records_extracted = 0usize;
     let mut bytes_downloaded = 0u64;
+    let mut changes = ChangeCounts::default();
 
     report(progress_snapshot(
         &crawl_id,
@@ -93,6 +120,7 @@ where
         queue.len(),
         join_set.len(),
         crawler_cfg.max_pages,
+        &changes,
     ));
 
     loop {
@@ -103,10 +131,6 @@ where
             let Some(target) = queue.pop_front() else {
                 break;
             };
-            let key = target.url.as_str().to_owned();
-            if !visited.insert(key) {
-                continue;
-            }
             pages_scheduled += 1;
 
             let crawl_id = crawl_id.clone();
@@ -118,6 +142,7 @@ where
             let limiter = Arc::clone(&limiter);
             let storage = storage.clone();
             let profile_name = profile_name.clone();
+            let cache_context = Arc::clone(&cache_context);
             join_set.spawn(async move {
                 let result = process_target(
                     &crawl_id,
@@ -130,6 +155,7 @@ where
                     &limiter,
                     &storage,
                     &profile_name,
+                    &cache_context,
                 )
                 .await;
                 (target, result)
@@ -149,14 +175,30 @@ where
                 links,
                 body_bytes,
                 record_count,
+                change,
+                http_failed,
             }) => {
-                pages_fetched += 1;
+                match change {
+                    Some(PageChange::New) => changes.pages_new += 1,
+                    Some(PageChange::Changed) => changes.pages_changed += 1,
+                    Some(PageChange::Unchanged) => changes.pages_unchanged += 1,
+                    None => {}
+                }
+                if http_failed {
+                    pages_failed += 1;
+                } else {
+                    pages_fetched += 1;
+                }
                 bytes_downloaded = bytes_downloaded.saturating_add(body_bytes as u64);
                 records_extracted = records_extracted.saturating_add(record_count);
                 for link in links {
+                    if visited.contains(link.as_str()) {
+                        continue;
+                    }
                     if pages_scheduled + queue.len() >= crawler_cfg.max_pages {
                         break;
                     }
+                    visited.insert(link.to_string());
                     queue.push_back(CrawlTarget {
                         url: link,
                         depth: target.depth + 1,
@@ -189,10 +231,12 @@ where
             queue.len(),
             join_set.len(),
             crawler_cfg.max_pages,
+            &changes,
         ));
     }
 
     let summary = CrawlSummary {
+        changes,
         crawl_id,
         started_at,
         finished_at: Utc::now(),
@@ -215,6 +259,7 @@ where
         0,
         0,
         crawler_cfg.max_pages,
+        &summary.changes,
     ));
     Ok(summary)
 }
@@ -231,8 +276,10 @@ fn progress_snapshot(
     queued: usize,
     active: usize,
     max_pages: usize,
+    changes: &ChangeCounts,
 ) -> CrawlProgress {
     CrawlProgress {
+        changes: changes.clone(),
         crawl_id: crawl_id.to_owned(),
         updated_at: Utc::now(),
         pages_scheduled,
@@ -259,6 +306,7 @@ async fn process_target<S>(
     limiter: &HostLimiter,
     storage: &Storage,
     profile_name: &str,
+    cache_context: &str,
 ) -> Result<ProcessResult>
 where
     S: Service<Request, Output = Response> + Clone + Send + Sync + 'static,
@@ -271,8 +319,15 @@ where
         return Ok(ProcessResult::Blocked(error.to_string()));
     }
 
+    let cached = if crawler_cfg.incremental {
+        storage
+            .cached_page(target.url.as_str(), cache_context)
+            .await?
+    } else {
+        None
+    };
     let fetch = network
-        .fetch_with_request_guard(&target.url, |url| async move {
+        .fetch_with_request_guard(&target.url, cached.as_ref(), |url| async move {
             let mut delay_ms = crawler_cfg.min_delay_ms;
             if crawler_cfg.respect_robots_txt {
                 let rules = load_robots(
@@ -305,21 +360,52 @@ where
             "robots.txt disallows URL".to_owned(),
         ));
     };
-    let body_sha256 = fingerprint::sha256(&fetch.body);
-    let records = if (200..300).contains(&fetch.status) {
+    let not_modified = fetch.status == 304;
+    let body_sha256 = if not_modified {
+        let previous = cached
+            .as_ref()
+            .context("HTTP 304 received without an incremental baseline")?;
+        if previous.final_url != fetch.final_url {
+            return Err(anyhow!("HTTP 304 received from a different baseline URL"));
+        }
+        previous.body_sha256.clone()
+    } else {
+        fingerprint::sha256(&fetch.body)
+    };
+    let change = if crawler_cfg.incremental && (not_modified || (200..300).contains(&fetch.status))
+    {
+        Some(match cached.as_ref() {
+            None => PageChange::New,
+            Some(previous)
+                if previous.body_sha256 == body_sha256 && previous.final_url == fetch.final_url =>
+            {
+                PageChange::Unchanged
+            }
+            Some(_) => PageChange::Changed,
+        })
+    } else {
+        None
+    };
+    let records = if (200..300).contains(&fetch.status) && change != Some(PageChange::Unchanged) {
         extract::extract_records(
             crawl_id,
             &fetch.final_url,
             fetch.content_type.as_deref(),
             &fetch.body,
             extraction_rules,
-        )
+        )?
     } else {
         Vec::new()
     };
 
-    let links = if crawler_cfg.discover_links
-        && target.depth < crawler_cfg.max_depth
+    let links = if not_modified {
+        cached
+            .as_ref()
+            .context("missing incremental baseline")?
+            .links
+            .clone()
+    } else if crawler_cfg.discover_links
+        && (target.depth < crawler_cfg.max_depth || crawler_cfg.incremental)
         && (200..300).contains(&fetch.status)
         && is_html(fetch.content_type.as_deref())
     {
@@ -335,7 +421,35 @@ where
         Vec::new()
     };
 
+    let next_cache = change.map(|_| CachedPage {
+        final_url: fetch.final_url.clone(),
+        etag: fetch.headers.get("etag").cloned().or_else(|| {
+            if not_modified {
+                cached.as_ref().and_then(|c| c.etag.clone())
+            } else {
+                None
+            }
+        }),
+        last_modified: fetch.headers.get("last-modified").cloned().or_else(|| {
+            if not_modified {
+                cached.as_ref().and_then(|c| c.last_modified.clone())
+            } else {
+                None
+            }
+        }),
+        content_type: fetch.content_type.clone().or_else(|| {
+            if not_modified {
+                cached.as_ref().and_then(|c| c.content_type.clone())
+            } else {
+                None
+            }
+        }),
+        body_sha256: body_sha256.clone(),
+        links: links.clone(),
+    });
+    let body_bytes = fetch.body.len();
     let page = PageRecord {
+        change,
         crawl_id: crawl_id.to_owned(),
         requested_url: fetch.requested_url.to_string(),
         final_url: fetch.final_url.to_string(),
@@ -344,7 +458,9 @@ where
         fetched_at: Utc::now(),
         status: fetch.status,
         http_version: fetch.http_version,
-        content_type: fetch.content_type,
+        content_type: fetch
+            .content_type
+            .or_else(|| next_cache.as_ref().and_then(|c| c.content_type.clone())),
         body_bytes: fetch.body.len(),
         elapsed_ms: fetch.elapsed_ms,
         redirect_chain: fetch
@@ -358,15 +474,28 @@ where
         response_fingerprint: fetch.response_fingerprint,
         response_headers: fetch.headers,
         body_sha256,
-        error: None,
+        error: (fetch.status >= 400).then(|| format!("HTTP {}", fetch.status)),
     };
-    storage.save_page(page, Some(fetch.body.clone())).await?;
+    storage
+        .save_page(page, if not_modified { None } else { Some(fetch.body) })
+        .await?;
     storage.save_records(&records).await?;
+    if let Some(cached) = next_cache {
+        storage
+            .save_cached_page(target.url.as_str(), cache_context, &cached)
+            .await?;
+    }
 
     Ok(ProcessResult::Fetched {
-        links,
-        body_bytes: fetch.body.len(),
+        links: if target.depth < crawler_cfg.max_depth {
+            links
+        } else {
+            Vec::new()
+        },
+        body_bytes,
         record_count: records.len(),
+        change,
+        http_failed: fetch.status >= 400,
     })
 }
 
@@ -446,6 +575,7 @@ fn error_page(
     error: &anyhow::Error,
 ) -> PageRecord {
     PageRecord {
+        change: None,
         crawl_id: crawl_id.to_owned(),
         requested_url: target.url.to_string(),
         final_url: target.url.to_string(),
@@ -471,6 +601,8 @@ fn error_page(
 #[derive(Debug)]
 enum ProcessResult {
     Fetched {
+        http_failed: bool,
+        change: Option<PageChange>,
         links: Vec<Url>,
         body_bytes: usize,
         record_count: usize,
@@ -479,13 +611,13 @@ enum ProcessResult {
 }
 
 #[derive(Debug)]
-struct HostLimiter {
+pub struct HostLimiter {
     hosts: DashMap<String, Arc<HostState>>,
     per_host_concurrency: usize,
 }
 
 impl HostLimiter {
-    fn new(per_host_concurrency: usize) -> Self {
+    pub fn new(per_host_concurrency: usize) -> Self {
         Self {
             hosts: DashMap::new(),
             per_host_concurrency,
@@ -509,7 +641,9 @@ impl HostLimiter {
         if *next_allowed > now {
             sleep(*next_allowed - now).await;
         }
-        *next_allowed = Instant::now() + delay;
+        *next_allowed = Instant::now()
+            .checked_add(delay)
+            .context("host delay exceeds the supported clock range")?;
         drop(next_allowed);
         Ok(permit)
     }
@@ -564,6 +698,353 @@ mod tests {
     use super::*;
     use rama::{http::Body, service::service_fn};
     use serde_json::json;
+
+    fn monitor_config(directory: &std::path::Path) -> Result<AppConfig> {
+        Ok(serde_json::from_value(json!({
+            "crawler": {"incremental": true, "seeds": ["http://127.0.0.1:8001/"],
+                "allowed_domains": ["127.0.0.1"], "allowed_ports": [8001,8002,8003],
+                "allow_private_networks": true, "respect_robots_txt": false,
+                "min_delay_ms": 0, "retries": 0, "max_pages": 4, "concurrency": 1},
+            "extraction": {"rules": [{"kind":"html_records","name":"content","item_selector":"main",
+                "fields":{"title":{"selector":"h1"}}}]},
+            "storage": {"sqlite_path": directory.join("pages.sqlite3").display().to_string(),
+                "jsonl_path": directory.join("records.jsonl").display().to_string(),
+                "summary_path": directory.join("summary.json").display().to_string()}
+        }))?)
+    }
+
+    #[tokio::test]
+    async fn failed_extraction_does_not_establish_an_incremental_baseline() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let directory = tempfile::tempdir()?;
+        let mut config = monitor_config(directory.path())?;
+        config.extraction.rules = vec![crate::config::ExtractionRule::JsonPath {
+            name: "content".to_owned(),
+            path: "$".to_owned(),
+            fields: Default::default(),
+        }];
+        let requests = Arc::new(AtomicUsize::new(0));
+        let client = service_fn(move |request: Request| {
+            let requests = Arc::clone(&requests);
+            async move {
+                assert!(!request.headers().contains_key("if-none-match"));
+                let body = if requests.fetch_add(1, Ordering::Relaxed) == 0 {
+                    "{bad"
+                } else {
+                    r#"{"value":1}"#
+                };
+                Ok::<_, BoxError>(
+                    Response::builder()
+                        .status(200)
+                        .header("content-type", "application/json")
+                        .header("etag", "\"v1\"")
+                        .body(Body::from(body))?,
+                )
+            }
+        });
+        let failed = run(config.clone(), client.clone()).await?;
+        assert_eq!(failed.pages_failed, 1);
+        assert_eq!(failed.changes.pages_new, 0);
+        let recovered = run(config, client).await?;
+        assert_eq!(recovered.pages_failed, 0);
+        assert_eq!(recovered.changes.pages_new, 1);
+        assert_eq!(recovered.records_extracted, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn incremental_runs_preserve_links_records_and_isolate_configurations() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let directory = tempfile::tempdir()?;
+        let mut config = monitor_config(directory.path())?;
+        let version = Arc::new(AtomicUsize::new(1));
+        let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (current, seen) = (Arc::clone(&version), Arc::clone(&requests));
+        let client = service_fn(move |request: Request| {
+            let (current, seen) = (Arc::clone(&current), Arc::clone(&seen));
+            async move {
+                let url = Url::parse(&request.uri().to_string())?;
+                let root = url.path() == "/";
+                let tag = if root {
+                    "\"index\"".to_owned()
+                } else {
+                    format!("\"child-{}\"", current.load(Ordering::Relaxed))
+                };
+                let validator = request
+                    .headers()
+                    .get("if-none-match")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                let modified = request
+                    .headers()
+                    .get("if-modified-since")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned);
+                seen.lock()
+                    .push((url.path().to_owned(), validator.clone(), modified));
+                let unchanged = validator.as_deref() == Some(tag.as_str());
+                let body = if unchanged {
+                    String::new()
+                } else if root {
+                    "<main><h1>Index</h1><a href='/child'>child</a></main>".to_owned()
+                } else {
+                    format!(
+                        "<main><h1>Version {}</h1></main>",
+                        current.load(Ordering::Relaxed)
+                    )
+                };
+                Ok::<_, BoxError>(
+                    Response::builder()
+                        .status(if unchanged { 304 } else { 200 })
+                        .header("etag", tag)
+                        .header("last-modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+                        .header("content-type", "text/html")
+                        .body(Body::from(body))?,
+                )
+            }
+        });
+        let first = run(config.clone(), client.clone()).await?;
+        assert_eq!(first.changes.pages_new, 2);
+        assert_eq!(first.records_extracted, 2);
+        version.store(2, Ordering::Relaxed);
+        let second = run(config.clone(), client.clone()).await?;
+        assert_eq!(second.changes.pages_changed, 1);
+        assert_eq!(second.changes.pages_unchanged, 1);
+        assert_eq!(second.records_extracted, 1);
+        let third = run(config.clone(), client.clone()).await?;
+        assert_eq!(third.changes.pages_unchanged, 2);
+        assert_eq!(third.records_extracted, 0);
+        assert_eq!(third.bytes_downloaded, 0);
+        let records = tokio::fs::read_to_string(&config.storage.jsonl_path).await?;
+        assert_eq!(records.lines().count(), 3);
+        let history = Storage::history(config.storage.sqlite_path.clone(), 2).await?;
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].crawl_id, third.crawl_id);
+        assert_eq!(history[1].crawl_id, second.crawl_id);
+        {
+            let seen = requests.lock();
+            assert_eq!(seen[2].0, "/");
+            assert_eq!(seen[2].1.as_deref(), Some("\"index\""));
+            assert_eq!(seen[2].2.as_deref(), Some("Wed, 21 Oct 2015 07:28:00 GMT"));
+            assert_eq!(seen[3].0, "/child");
+        }
+        config
+            .crawler
+            .custom_headers
+            .insert("accept-language".to_owned(), "es".to_owned());
+        let isolated = run(config, client).await?;
+        assert_eq!(isolated.changes.pages_new, 2);
+        assert!(
+            requests
+                .lock()
+                .iter()
+                .skip(6)
+                .all(|(_, tag, modified)| tag.is_none() && modified.is_none())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn validators_do_not_follow_redirects_to_a_different_destination() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let directory = tempfile::tempdir()?;
+        let mut config = monitor_config(directory.path())?;
+        config.crawler.discover_links = false;
+        let destination = Arc::new(AtomicUsize::new(8002));
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (port, requests) = (Arc::clone(&destination), Arc::clone(&seen));
+        let client = service_fn(move |request: Request| {
+            let (port, requests) = (Arc::clone(&port), Arc::clone(&requests));
+            async move {
+                let url = Url::parse(&request.uri().to_string())?;
+                let conditional = request.headers().contains_key("if-none-match");
+                requests.lock().push((url.port(), conditional));
+                if url.port() == Some(8001) {
+                    Ok::<_, BoxError>(
+                        Response::builder()
+                            .status(302)
+                            .header(
+                                "location",
+                                format!(
+                                    "http://127.0.0.1:{}/resource",
+                                    port.load(Ordering::Relaxed)
+                                ),
+                            )
+                            .body(Body::empty())?,
+                    )
+                } else {
+                    Ok(Response::builder()
+                        .status(if conditional { 304 } else { 200 })
+                        .header("etag", "\"shared\"")
+                        .body(Body::from(if conditional { "" } else { "identical bytes" }))?)
+                }
+            }
+        });
+        assert_eq!(
+            run(config.clone(), client.clone()).await?.changes.pages_new,
+            1
+        );
+        assert_eq!(
+            run(config.clone(), client.clone())
+                .await?
+                .changes
+                .pages_unchanged,
+            1
+        );
+        destination.store(8003, Ordering::Relaxed);
+        assert_eq!(run(config, client).await?.changes.pages_changed, 1);
+        assert_eq!(
+            *seen.lock(),
+            vec![
+                (Some(8001), false),
+                (Some(8002), false),
+                (Some(8001), false),
+                (Some(8002), true),
+                (Some(8001), false),
+                (Some(8003), false)
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn raw_bytes_and_hash_comparison_work_without_validators() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut config = monitor_config(directory.path())?;
+        config.storage.save_bodies = true;
+        config.storage.bodies_dir = directory.path().join("bodies").display().to_string();
+        let client = service_fn(|_: Request| async {
+            Ok::<_, BoxError>(Response::new(Body::from(vec![0xff, 0x00, 0x80])))
+        });
+        let first = run(config.clone(), client.clone()).await?;
+        assert_eq!(first.changes.pages_new, 1);
+        let second = run(config.clone(), client).await?;
+        assert_eq!(second.changes.pages_unchanged, 1);
+        assert_eq!(second.bytes_downloaded, 3);
+        let path = std::path::Path::new(&config.storage.bodies_dir)
+            .join(format!("{}.body", fingerprint::sha256(&[0xff, 0x00, 0x80])));
+        assert_eq!(tokio::fs::read(path).await?, vec![0xff, 0x00, 0x80]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsolicited_304_is_a_failure() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let config = monitor_config(directory.path())?;
+        let client = service_fn(|_: Request| async {
+            Ok::<_, BoxError>(Response::builder().status(304).body(Body::empty())?)
+        });
+        let summary = run(config, client).await?;
+        assert_eq!(summary.pages_failed, 1);
+        assert_eq!(summary.changes.pages_unchanged, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn last_modified_fallback_and_errors_preserve_the_baseline() -> Result<()> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let directory = tempfile::tempdir()?;
+        let config = monitor_config(directory.path())?;
+        let phase = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let (current, requests) = (Arc::clone(&phase), Arc::clone(&seen));
+        let client =
+            service_fn(move |request: Request| {
+                let (current, requests) = (Arc::clone(&current), Arc::clone(&requests));
+                async move {
+                    assert!(!request.headers().contains_key("if-none-match"));
+                    requests.lock().push(
+                        request
+                            .headers()
+                            .get("if-modified-since")
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_owned),
+                    );
+                    let phase = current.load(Ordering::Relaxed);
+                    let mut response = Response::builder().status(if phase == 1 {
+                        503
+                    } else if phase == 3 {
+                        304
+                    } else {
+                        200
+                    });
+                    if phase != 1 {
+                        response = response.header(
+                            "last-modified",
+                            if phase == 0 {
+                                "Wed, 21 Oct 2015 07:28:00 GMT"
+                            } else {
+                                "Thu, 22 Oct 2015 07:28:00 GMT"
+                            },
+                        );
+                    }
+                    Ok::<_, BoxError>(response.header("content-type", "text/html").body(
+                        Body::from(if phase == 3 {
+                            ""
+                        } else if phase == 0 {
+                            "<main><h1>one</h1></main>"
+                        } else {
+                            "<main><h1>two</h1></main>"
+                        }),
+                    )?)
+                }
+            });
+        assert_eq!(
+            run(config.clone(), client.clone()).await?.changes.pages_new,
+            1
+        );
+        phase.store(1, Ordering::Relaxed);
+        assert_eq!(run(config.clone(), client.clone()).await?.pages_failed, 1);
+        phase.store(2, Ordering::Relaxed);
+        assert_eq!(
+            run(config.clone(), client.clone())
+                .await?
+                .changes
+                .pages_changed,
+            1
+        );
+        phase.store(3, Ordering::Relaxed);
+        assert_eq!(run(config, client).await?.changes.pages_unchanged, 1);
+        assert_eq!(
+            *seen.lock(),
+            vec![
+                None,
+                Some("Wed, 21 Oct 2015 07:28:00 GMT".to_owned()),
+                Some("Wed, 21 Oct 2015 07:28:00 GMT".to_owned()),
+                Some("Thu, 22 Oct 2015 07:28:00 GMT".to_owned())
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn duplicate_links_do_not_consume_the_page_budget() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let mut config = monitor_config(directory.path())?;
+        config.crawler.incremental = false;
+        let requests = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen = Arc::clone(&requests);
+        let client = service_fn(move |request: Request| {
+            let seen = Arc::clone(&seen);
+            async move {
+                let url = Url::parse(&request.uri().to_string())?;
+                seen.lock().push(url.path().to_owned());
+                let body = match url.path() {
+                    "/" => "<a href='/a'>a</a><a href='/b'>b</a>",
+                    "/a" => "<a href='/b'>duplicate</a><a href='/c'>c</a>",
+                    _ => "done",
+                };
+                Ok::<_, BoxError>(
+                    Response::builder()
+                        .header("content-type", "text/html")
+                        .body(Body::from(body))?,
+                )
+            }
+        });
+        assert_eq!(run(config, client).await?.pages_fetched, 4);
+        assert_eq!(*requests.lock(), vec!["/", "/a", "/b", "/c"]);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn redirects_obey_destination_robots() -> Result<()> {

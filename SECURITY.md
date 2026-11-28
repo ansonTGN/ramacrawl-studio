@@ -31,6 +31,18 @@ No guarde contraseñas de proxy, tokens ni cookies en archivos versionados. Gene
 
 ## Persistencia de contenido
 
+El modo incremental añade validadores HTTP, hashes y enlaces a la base SQLite.
+La huella de configuración separa las bases de comparación sin copiar las
+cabeceras de autenticación ni las credenciales de proxy a la caché. Las URLs y
+los validadores almacenados pueden contener datos sensibles. Los validadores se
+envían únicamente a la URL final que los emitió; una redirección a otro destino
+fuerza una petición sin esos validadores. Los errores HTTP o de extracción no
+sustituyen la última base válida.
+Proteja y respalde la base de datos, el JSONL y los cuerpos: el historial de
+monitorización crece con el tiempo y puede contener datos sensibles. La limpieza
+desde el panel se rechaza cuando el modo incremental está activo. Use un único
+proceso de rastreo escritor por base de datos.
+
 `save_bodies: true` conserva el cuerpo completo recibido y puede almacenar información sensible aunque las cabeceras estén redactadas. Desactive esta opción salvo que exista una necesidad operativa clara, cifre el volumen de salida y aplique retención limitada.
 
 Los errores producidos por dependencias de red podrían contener detalles del endpoint. No active trazas de máxima verbosidad en entornos con secretos sin revisar antes la salida.
